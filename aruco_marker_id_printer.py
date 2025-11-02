@@ -1,4 +1,6 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python
+
+from __future__ import absolute_import, division, print_function
 
 import rospy
 import cv2
@@ -52,7 +54,13 @@ class ArucoMarkerIDPrinter:
                 ", ".join(sorted(available)),
             )
             dictionary_id = aruco_module.DICT_4X4_50
-        return aruco_module.getPredefinedDictionary(dictionary_id)
+        if hasattr(aruco_module, "getPredefinedDictionary"):
+            return aruco_module.getPredefinedDictionary(dictionary_id)
+        # OpenCV < 3.2 fallback
+        if hasattr(aruco_module, "Dictionary_get"):
+            return aruco_module.Dictionary_get(dictionary_id)
+        rospy.logerr("cv2.aruco does not expose a dictionary loader; check OpenCV installation.")
+        raise AttributeError("Unable to load ArUco dictionary from cv2.aruco")
 
     def _build_detector(self):
         aruco_module = cv2.aruco
@@ -88,16 +96,22 @@ class ArucoMarkerIDPrinter:
                 gray, self.dictionary, parameters=self._legacy_parameters
             )
 
-        if ids is None:
-            return
+        if ids is not None:
+            try:
+                cv2.aruco.drawDetectedMarkers(frame, corners, ids)
+            except AttributeError:
+                # Older OpenCV builds may not expose drawDetectedMarkers
+                pass
 
-        now = rospy.Time.now()
+            now = rospy.Time.now()
+            for marker_id in ids.flatten():
+                last_print = self.last_print_times.get(marker_id)
+                if last_print is None or now - last_print > self.cooldown:
+                    rospy.loginfo("Detected ArUco marker ID: %d", marker_id)
+                    self.last_print_times[marker_id] = now
 
-        for marker_id in ids.flatten():
-            last_print = self.last_print_times.get(marker_id)
-            if last_print is None or now - last_print > self.cooldown:
-                rospy.loginfo("Detected ArUco marker ID: %d", marker_id)
-                self.last_print_times[marker_id] = now
+        cv2.imshow("ArUco Detection", frame)
+        cv2.waitKey(1)
 
 
 def main():
