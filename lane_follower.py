@@ -48,7 +48,7 @@ def warpping(image):
     # roi_source = np.float32([[86, 150], [554, 150], [640, 400], [0, 400]])
     roi_source = np.float32([[120, 0], [520, 0], [520, 480], [120, 480]])
     # source = np.float32([[200, 210], [20,480], [420,210], [620, 480]])
-    source = np.float32([[140, 100], [0, 480], [500, 100], [640, 480]])
+    source = np.float32([[200, 100], [0, 480], [440, 100], [640, 480]])
     destination = np.float32([[0, 0], [0, 480], [480, 0], [480, 480]])
     
     M = cv2.getPerspectiveTransform(source, destination)
@@ -122,9 +122,9 @@ def compare_to_previous_value(queue, data, threshold, max_size):
 class lane_detect():
     def __init__(self):
         self.bridge = CvBridge()
-        # rospy.init_node('lane_detection_node', anonymous=False)
-        rospy.Subscriber('/main_camera/image_raw/compressed', CompressedImage, self.camera_callback)
-        # self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
+        rospy.init_node('lane_detection_node', anonymous=False)
+        rospy.Subscriber('/usb_cam/image_raw/compressed', CompressedImage, self.camera_callback, queue_size=1, tcp_nodelay=True)
+        self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
 
         self.speed = Twist()
 
@@ -222,9 +222,9 @@ class lane_detect():
         
         
         warpped_img, minv = warpping(self.image)
-        # cv2.namedWindow('BEV')
-        # cv2.moveWindow('BEV', 0, 0)
-        # cv2.imshow('BEV', warpped_img)
+        cv2.namedWindow('BEV')
+        cv2.moveWindow('BEV', 0, 0)
+        cv2.imshow('BEV', warpped_img)
         
         blurred_img = cv2.GaussianBlur(warpped_img, (7, 7), 5)
         # cv2.namedWindow('Blurred')
@@ -232,23 +232,23 @@ class lane_detect():
         # cv2.imshow('Blurred', blurred_img)
         
         w_f_img = color_filter(blurred_img)
-        # cv2.rectangle(w_f_img, (0, 0), (480, 200), (0, 0, 0), -1)
-        # cv2.namedWindow('Color filter')
-        # cv2.moveWindow('Color filter', 0, 550)
-        # cv2.circle(w_f_img, (240,240), 2, (255,255,255), thickness=-1)
-        # cv2.imshow('Color filter', w_f_img)
+        cv2.rectangle(w_f_img, (0, 0), (480, 200), (0, 0, 0), -1)
+        cv2.namedWindow('Color filter')
+        cv2.moveWindow('Color filter', 0, 550)
+        cv2.circle(w_f_img, (240,240), 2, (255,255,255), thickness=-1)
+        cv2.imshow('Color filter', w_f_img)
         
         grayscale = cv2.cvtColor(w_f_img, cv2.COLOR_BGR2GRAY)
         # print(grayscale[240][240])
         ret, thresh = cv2.threshold(grayscale, 50, 255, cv2.THRESH_BINARY) #170, 255
         
         canny_img = cv2.Canny(thresh, 10, 100)
-        # cv2.namedWindow('Canny')
-        # cv2.moveWindow('Canny', 700, 600)
-        # cv2.imshow('Canny', canny_img)
-        # cv2.namedWindow('thresh')
-        # cv2.moveWindow('thresh', 700, 600)
-        # cv2.imshow('thresh', thresh)
+        cv2.namedWindow('Canny')
+        cv2.moveWindow('Canny', 700, 600)
+        cv2.imshow('Canny', canny_img)
+        cv2.namedWindow('thresh')
+        cv2.moveWindow('thresh', 700, 600)
+        cv2.imshow('thresh', thresh)
         
         lines = cv2.HoughLines(canny_img, 1, np.pi/180, 80, None, 0, 0)
         
@@ -308,10 +308,10 @@ class lane_detect():
         lat_err = distance * cos(line_angle)
 
         self.speed.linear.x = 0.1
-        self.speed.angular.z = theta_err + atan(k*lat_err)
-        # self.pub.publish(speed)
-        # print(degrees(theta_err),degrees(atan(k*lat_err)))
-        # print(self.speed.angular.z)
+        self.speed.angular.z = (theta_err + atan(k*lat_err)) * 2.0
+        self.pub.publish(self.speed)
+        print(degrees(theta_err),degrees(atan(k*lat_err)))
+        print(self.speed.angular.z)
         
 
 
