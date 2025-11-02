@@ -173,7 +173,7 @@ class lane_detect():
         self.max_angular_speed = 1.5
         self.lat_weight = 1.2
         self.heading_weight = 0.7
-        self.pid = PIDController(kp=1.4, ki=0.02, kd=0.25, integral_limit=2.0)
+        self.pid = PIDController(kp=0.9, ki=0.05, kd=0.01, integral_limit=2.0)
 
     
     def camera_callback(self, data):
