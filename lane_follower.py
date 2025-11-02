@@ -46,9 +46,9 @@ def warpping(image):
     """
 
     # roi_source = np.float32([[86, 150], [554, 150], [640, 400], [0, 400]])
-    roi_source = np.float32([[120, 0], [520, 0], [520, 480], [120, 480]])
+    roi_source = np.float32([[80, 0], [560, 0], [560, 480], [80, 480]])
     # source = np.float32([[200, 210], [20,480], [420,210], [620, 480]])
-    source = np.float32([[200, 100], [0, 480], [440, 100], [640, 480]])
+    source = np.float32([[190, 100], [0, 480], [450, 100], [640, 480]])
     destination = np.float32([[0, 0], [0, 480], [480, 0], [480, 480]])
     
     M = cv2.getPerspectiveTransform(source, destination)
@@ -137,9 +137,9 @@ class lane_detect():
     
     def high_level_detect(self, hough_img):
 
-        nwindows = 10       # window 개수
-        margin = 75         # window 가로 길이
-        minpix = 30          # 차선 인식을 판정하는 최소 픽셀 수
+        nwindows = 15       # window 개수
+        margin = 90         # window 가로 길이
+        minpix = 15          # 차선 인식을 판정하는 최소 픽셀 수
         lane_bin_th = 225
        
         histogram = np.sum(hough_img[hough_img.shape[0]//2:,:],   axis=0)
@@ -232,7 +232,7 @@ class lane_detect():
         # cv2.imshow('Blurred', blurred_img)
         
         w_f_img = color_filter(blurred_img)
-        cv2.rectangle(w_f_img, (0, 0), (480, 200), (0, 0, 0), -1)
+        cv2.rectangle(w_f_img, (0, 0), (480, 100), (0, 0, 0), -1)
         cv2.namedWindow('Color filter')
         cv2.moveWindow('Color filter', 0, 550)
         cv2.circle(w_f_img, (240,240), 2, (255,255,255), thickness=-1)
@@ -271,7 +271,7 @@ class lane_detect():
                 
                 slope = 90 - degrees(atan(b / a))
             
-                if abs(slope) < 20:
+                if abs(slope) < 5:
                     cv2.line(hough_img, (x1, y1), (x2, y2), 0, 30)
                 
                 else:    
@@ -283,11 +283,11 @@ class lane_detect():
         
         fit, avg = self.high_level_detect(hough_img)
         
-        fit = np.polyfit(np.array(y),np.array(x),1)
+        # fit = np.polyfit(np.array(y),np.array(x),1)
         # print(fit)
         
         line = np.poly1d(fit)
-        
+         
         # 좌,우측 차선의 휘어진 각도
         line_angle = degrees(atan(line[1]))
 
@@ -308,10 +308,10 @@ class lane_detect():
         lat_err = distance * cos(line_angle)
 
         self.speed.linear.x = 0.1
-        self.speed.angular.z = (theta_err + atan(k*lat_err)) * 2.0
+        self.speed.angular.z = (theta_err + atan(k*lat_err))*0.4
         self.pub.publish(self.speed)
-        print(degrees(theta_err),degrees(atan(k*lat_err)))
-        print(self.speed.angular.z)
+        print("angle: ", degrees(theta_err),degrees(atan(k*lat_err)))
+        print("cmd_ang: ", self.speed.angular.z)
         
 
 
