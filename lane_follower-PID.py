@@ -1,6 +1,8 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 
+from __future__ import division
+
 import rospy
 import cv2
 import numpy as np
@@ -14,7 +16,7 @@ from collections import deque
 distance_threshold = 20
 theta_threshold = 10
 max_queue_size = 5  # 큐의 최대 크기 설정
-weights = [1/85, 3/85, 7/85, 15/85, 60/85]
+weights = [1.0/85.0, 3.0/85.0, 7.0/85.0, 15.0/85.0, 60.0/85.0]
 
 distance_L_queue = deque([], maxlen=5)
 distance_R_queue = deque([], maxlen=5)
@@ -119,6 +121,46 @@ def compare_to_previous_value(queue, data, threshold, max_size):
     return result
 
 
+class PIDController(object):
+    def __init__(self, kp, ki, kd, integral_limit=None):
+        self.kp = kp
+        self.ki = ki
+        self.kd = kd
+        self.integral_limit = integral_limit
+        self.integral = 0.0
+        self.prev_error = 0.0
+        self.prev_time = None
+
+    def reset(self):
+        self.integral = 0.0
+        self.prev_error = 0.0
+        self.prev_time = None
+
+    def update(self, error, current_time):
+        if self.prev_time is None:
+            dt = 0.0
+        else:
+            dt = max(current_time - self.prev_time, 0.0)
+
+        if dt > 0.0:
+            derivative = (error - self.prev_error) / dt
+        else:
+            derivative = 0.0
+
+        self.integral += error * dt
+        if self.integral_limit is not None:
+            if self.integral > self.integral_limit:
+                self.integral = self.integral_limit
+            elif self.integral < -self.integral_limit:
+                self.integral = -self.integral_limit
+
+        output = (self.kp * error) + (self.ki * self.integral) + (self.kd * derivative)
+
+        self.prev_error = error
+        self.prev_time = current_time
+        return output
+
+
 class lane_detect():
     def __init__(self):
         self.bridge = CvBridge()
@@ -127,6 +169,11 @@ class lane_detect():
         self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
 
         self.speed = Twist()
+        self.base_linear_speed = 0.1
+        self.max_angular_speed = 1.5
+        self.lat_weight = 1.2
+        self.heading_weight = 0.7
+        self.pid = PIDController(kp=1.4, ki=0.02, kd=0.25, integral_limit=2.0)
 
     
     def camera_callback(self, data):
@@ -289,7 +336,7 @@ class lane_detect():
         line = np.poly1d(fit)
          
         # 좌,우측 차선의 휘어진 각도
-        line_angle = degrees(atan(line[1]))
+        heading_rad = atan(line[1])
 
 
         cv2.namedWindow('Sliding Window')
@@ -297,20 +344,28 @@ class lane_detect():
         cv2.imshow("Sliding Window", out_img)
         cv2.waitKey(1)
         if fit[0]==0 and fit[1]==0:
-            distance=0
-        else:
-            distance = -(np.polyval(fit,480) - 240)
+            self.pid.reset()
+            return
+
+        distance = -(np.polyval(fit,480) - 240)
+
+        if np.isnan(distance) or np.isnan(heading_rad):
+            self.pid.reset()
+            return
+
         # print(line_angle, distance)
 
-        k= 0.002
-        amp = 2
-        theta_err = radians(line_angle)
-        lat_err = distance * cos(line_angle)
+        theta_err = heading_rad
+        lat_norm = distance / 240.0
+        combined_error = (self.lat_weight * lat_norm) + (self.heading_weight * theta_err)
 
-        self.speed.linear.x = 0.1
-        self.speed.angular.z = (theta_err + atan(k*lat_err))*0.74
+        pid_output = self.pid.update(combined_error, rospy.get_time())
+        pid_output = np.clip(pid_output, -self.max_angular_speed, self.max_angular_speed)
+
+        self.speed.linear.x = self.base_linear_speed
+        self.speed.angular.z = pid_output
         self.pub.publish(self.speed)
-        print("angle: ", degrees(theta_err),degrees(atan(k*lat_err)))
+        print("angle(rad): ", theta_err, "lat_norm: ", lat_norm)
         print("cmd_ang: ", self.speed.angular.z)
         
 
