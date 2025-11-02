@@ -48,7 +48,7 @@ def warpping(image):
     # roi_source = np.float32([[86, 150], [554, 150], [640, 400], [0, 400]])
     roi_source = np.float32([[80, 0], [560, 0], [560, 480], [80, 480]])
     # source = np.float32([[200, 210], [20,480], [420,210], [620, 480]])
-    source = np.float32([[190, 100], [0, 480], [450, 100], [640, 480]])
+    source = np.float32([[160, 100], [0, 480], [480, 100], [640, 480]])
     destination = np.float32([[0, 0], [0, 480], [480, 0], [480, 480]])
     
     M = cv2.getPerspectiveTransform(source, destination)
@@ -302,13 +302,13 @@ class lane_detect():
             distance = -(np.polyval(fit,480) - 240)
         # print(line_angle, distance)
 
-        k= 0.001
+        k= 0.002
         amp = 2
         theta_err = radians(line_angle)
         lat_err = distance * cos(line_angle)
 
         self.speed.linear.x = 0.1
-        self.speed.angular.z = (theta_err + atan(k*lat_err))*0.4
+        self.speed.angular.z = (theta_err + atan(k*lat_err))*0.74
         self.pub.publish(self.speed)
         print("angle: ", degrees(theta_err),degrees(atan(k*lat_err)))
         print("cmd_ang: ", self.speed.angular.z)
