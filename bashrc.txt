@@ -1,0 +1,6 @@
+# alias
+alias cm='cd ~/catkin_ws && catkin_make'
+alias sd='source devel/setup.bash'
+alias af='cd ~/catkin_ws/src/af'
+alias robot='roslaunch omo_r1mini_bringup omo_r1mini_bringup.launch'
+alias camera='roslaunch mm_cam usb_cam.launch'
