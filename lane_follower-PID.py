@@ -24,6 +24,7 @@ distance_R_queue = deque([], maxlen=5)
 theta_L_queue = deque([], maxlen=5)
 theta_R_queue = deque([], maxlen=5)
 
+# 이 코드에서는 region_of_interest 함수가 실제로 사용되지는 않음
 def region_of_interest(img, vertices, color3=(255,255,255), color1=255):
 
     mask = np.zeros_like(img) 
@@ -41,7 +42,7 @@ def region_of_interest(img, vertices, color3=(255,255,255), color1=255):
 
 def warpping(image):
     """
-        차선을 BEV로 변환하는 함수
+        차선을 BEV(Birds Eye View)로 변환하는 함수
         
         Return
         1) _image : BEV result image
@@ -49,13 +50,13 @@ def warpping(image):
     """
 
     # roi_source = np.float32([[86, 150], [554, 150], [640, 400], [0, 400]])
-    roi_source = np.float32([[80, 0], [560, 0], [560, 480], [80, 480]])
+    roi_source = np.float32([[80, 0], [560, 0], [560, 480], [80, 480]]) # 밑의 region_of_interest가 주석처리되어 실제 연산에는 안 씀(이 파일에서는 roi_source 아예 안 써).
     # source = np.float32([[200, 210], [20,480], [420,210], [620, 480]])
-    source = np.float32([[160, 100], [0, 480], [480, 100], [640, 480]])
-    destination = np.float32([[0, 0], [0, 480], [480, 0], [480, 480]])
+    source = np.float32([[160, 100], [0, 480], [480, 100], [640, 480]]) # 투시 변환의 입력 꼭짓점들
+    destination = np.float32([[0, 0], [0, 480], [480, 0], [480, 480]]) # 투시 변환 후 목표 평면의 꼭짓점 -> 사다리꼴의 원본source를 직사각형BirdEyesView으로 바꿔줌
     
-    M = cv2.getPerspectiveTransform(source, destination)
-    Minv = cv2.getPerspectiveTransform(destination, source)
+    M = cv2.getPerspectiveTransform(source, destination) # 두 평면 사이의 투시 변환 행렬 계산
+    Minv = cv2.getPerspectiveTransform(destination, source) # (지금 코드에서는 안 씀) 역투시 변환 행렬 계산 -> BEV 좌표에서 다시 원본 시점으로 역-매핑해야 할 때 사용 -> (예를 들어 검출된 포인트를 다시 카메라 시점으로 투영할 때)
     
     # image = region_of_interest(image, [roi_source])
     
@@ -65,6 +66,7 @@ def warpping(image):
 
     return warp_image, Minv
 
+# HLS 색공간(색상(H), 밝기(L), 채도(S) 축)에서 어두운 픽셀만 남겨 바닥 잡음과 배경을 제거
 def color_filter(image):
     hls = cv2.cvtColor(image, cv2.COLOR_BGR2HLS)
 
@@ -167,7 +169,7 @@ class lane_detect():
         self.bridge = CvBridge()
         rospy.init_node('lane_detection_node', anonymous=False)
         rospy.Subscriber('/usb_cam/image_raw/compressed', CompressedImage, self.camera_callback, queue_size=1, tcp_nodelay=True)
-        self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
+        self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1) # 로봇 선속도, 각속도(yaw회전속도) 명령어 발행
 
         self.speed = Twist()
         self.base_linear_speed = 0.1
@@ -179,12 +181,12 @@ class lane_detect():
 
     
     def camera_callback(self, data):
-        self.image = self.bridge.compressed_imgmsg_to_cv2(data, desired_encoding="bgr8")
-        self.aruco_trig.observe_and_maybe_trigger(self.image)
-        self.lane_detect()
+        self.image = self.bridge.compressed_imgmsg_to_cv2(data, desired_encoding="bgr8") # ROS 카메라 토픽으로부터 받은 압축 이미지를 OpenCV 형식으로 변환
+        self.aruco_trig.observe_and_maybe_trigger(self.image) # ArUco 마커 감지를 위해 이미지를 aruco_trigger.py에 전달
+        self.lane_detect() # 차선 인식 알고리즘 실행
         
 
-    
+    #  이미지 하단 히스토그램에서 최고값 구간을 기준으로 15개의 윈도우를 위로 올리며 차선 픽셀을 수집 -> 각 윈도우 중심들을 2차 다항식으로 피팅해 차선 곡률과 중심선을 계산하고, 디버깅용 BEV 이미지를 생성(디버깅 창 제목: 'BEV')
     def high_level_detect(self, hough_img):
 
         nwindows = 15       # window 개수
@@ -336,9 +338,9 @@ class lane_detect():
         # fit = np.polyfit(np.array(y),np.array(x),1)
         # print(fit)
         
-        line = np.poly1d(fit)
-         
-        # 좌,우측 차선의 휘어진 각도
+        line = np.poly1d(fit) # 차선의 2차 다항식 만들기
+
+        # 좌,우측 차선의 휘어진 각도: a·y² + b·y + c의 미분값은 2a·y + b이지만, 그냥 편하게 1차 계수 b만 사용해서 각도 계산
         heading_rad = atan(line[1])
 
 
@@ -350,7 +352,7 @@ class lane_detect():
             self.pid.reset()
             return
 
-        distance = -(np.polyval(fit,480) - 240)
+        distance = -(np.polyval(fit,480) - 240) # 하단(y=480)에서 곡선의 x좌표와 영상 중앙(240) 사이의 횡방향 오차를 계산 = 차선 중심과 화면 중심(픽셀 중심) 사이의 픽셀 편차
 
         if np.isnan(distance) or np.isnan(heading_rad):
             self.pid.reset()
@@ -358,15 +360,17 @@ class lane_detect():
 
         # print(line_angle, distance)
 
-        theta_err = heading_rad
-        lat_norm = distance / 240.0
+        # Error는 두 Term 반영: theta_error & lat_norm
+        theta_err = heading_rad # "차선 진행 방향" vs. "차량이 현재 보고 있는 방향(=화면 세로축)"
+        lat_norm = distance / 240.0 # 픽셀 오차(화면중심~차선 중심)를 -1.0 ~ 1.0 범위로 정규화
         combined_error = (self.lat_weight * lat_norm) + (self.heading_weight * theta_err)
 
         pid_output = self.pid.update(combined_error, rospy.get_time())
         pid_output = np.clip(pid_output, -self.max_angular_speed, self.max_angular_speed)
 
-        self.speed.linear.x = self.base_linear_speed
-        self.speed.angular.z = pid_output
+        # PID가 조정하는 건 각속도(angular.z)만이라, 차량은 일정 속도로 전진하면서 좌우로만 보정하는 구조
+        self.speed.linear.x = self.base_linear_speed # 일정한 전진 속도 유지
+        self.speed.angular.z = pid_output # PID 제어기로부터 계산된 각속도로 명령 줘
         self.pub.publish(self.speed)
         print("angle(rad): ", theta_err, "lat_norm: ", lat_norm)
         print("cmd_ang: ", self.speed.angular.z)
