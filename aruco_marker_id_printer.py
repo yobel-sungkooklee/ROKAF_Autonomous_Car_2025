@@ -1,5 +1,7 @@
 #!/usr/bin/env python
-
+"""
+마커의 id를 터미널로 출력하는 id printer. 각 마커의 id를 알아내는 도구입니다.
+"""
 from __future__ import absolute_import, division, print_function
 
 import rospy
