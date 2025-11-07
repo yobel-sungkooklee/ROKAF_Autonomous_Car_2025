@@ -51,7 +51,7 @@ def warpping(image):
     # roi_source = np.float32([[86, 150], [554, 150], [640, 400], [0, 400]])
     roi_source = np.float32([[80, 0], [560, 0], [560, 480], [80, 480]])
     # source = np.float32([[200, 210], [20,480], [420,210], [620, 480]])
-    source = np.float32([[160, 100], [0, 480], [480, 100], [640, 480]])
+    source = np.float32([[70, 200], [0, 400], [570, 200], [640, 400]]) # TODO
     destination = np.float32([[0, 0], [0, 480], [480, 0], [480, 480]])
     
     M = cv2.getPerspectiveTransform(source, destination)
@@ -174,7 +174,7 @@ class lane_detect():
         self.max_angular_speed = 1.5
         self.lat_weight = 1.2
         self.heading_weight = 0.7
-        self.pid = PIDController(kp=0.75, ki=0.001, kd=0.01, integral_limit=2.0)
+        self.pid = PIDController(kp=0.9, ki=0.001, kd=0.01, integral_limit=2.0) # TODO
         self.aruco_trig = ArucoTrigger(cmd_topic="/cmd_vel")
 
     
@@ -255,7 +255,7 @@ class lane_detect():
         mid_lane_inds = np.concatenate(mid_lane_inds)
 
         fit = np.polyfit(np.array(y[1:]),np.array(x[1:]),2)
-
+        
         #out_img에서 왼쪽 선들의 픽셀값을 BLUE로, 
         #오른쪽 선들의 픽셀값을 RED로 바꿔준다.
         out_img[nz[0][mid_lane_inds], nz[1][mid_lane_inds]] = [255, 0, 0]
@@ -268,6 +268,10 @@ class lane_detect():
                 
         cv2.namedWindow('Original')
         cv2.moveWindow('Original', 700, 0)
+        cv2.circle(self.image, (0,400), 10, (0,0,255), -1) #red
+        cv2.circle(self.image, (640,400), 10, (0,255,0), -1) #green
+        cv2.circle(self.image, (70,200), 10, (255,0,0), -1) #blue
+        cv2.circle(self.image, (570,200), 10, (255,0,255), -1) #magenta
         cv2.imshow('Original', self.image)
         
         
@@ -350,8 +354,11 @@ class lane_detect():
             self.pid.reset()
             return
 
-        distance = -(np.polyval(fit,480) - 240)
+        p = np.poly1d(fit)
+        x_at_480 = p(480)
 
+        distance = - (x_at_480 - 240) # TODO
+        print(distance)
         if np.isnan(distance) or np.isnan(heading_rad):
             self.pid.reset()
             return
@@ -368,8 +375,8 @@ class lane_detect():
         self.speed.linear.x = self.base_linear_speed
         self.speed.angular.z = pid_output
         self.pub.publish(self.speed)
-        print("angle(rad): ", theta_err, "lat_norm: ", lat_norm)
-        print("cmd_ang: ", self.speed.angular.z)
+        #print("angle(rad): ", theta_err, "lat_norm: ", lat_norm)
+        #print("cmd_ang: ", self.speed.angular.z)
         
         self.aruco_trig.step()
         
