@@ -167,6 +167,18 @@ class ArucoTrigger(object):
         # 화면 y좌표의 최대값: 이 값을 초과하면 관심 영역 밖으로 간주
         self.max_y = 460.0
 
+        # QR 코드 식별기(지원되는 OpenCV 버전에서만 사용 가능)
+        self.qr_detector = None
+        self._qr_last_logged = {}
+        self.qr_log_cooldown = 1.0  # 동일 QR 텍스트를 너무 자주 찍지 않도록 제한
+        if hasattr(cv2, "QRCodeDetector"):
+            try:
+                self.qr_detector = cv2.QRCodeDetector()
+            except cv2.error as exc:
+                rospy.logwarn("[ArucoTrigger] Failed to init QRCodeDetector: %s", exc)
+        else:
+            rospy.logwarn("[ArucoTrigger] OpenCV build has no QRCodeDetector; QR logging disabled.")
+
 
     # _gate: 하나의 검출(det)에 대해 "이걸 유효한 마커로 볼 것인가?"를 결정하는 함수
     # det는 {"id": ..., "center": (cx, cy), "area": ...} 구조의 딕셔너리
@@ -223,6 +235,7 @@ class ArucoTrigger(object):
         # 가장 최근 프레임을 저장합니다. (step()에서 캡처 액션을 위해 사용)
         # 캡처 시점에는 카메라 콜백이 이미 지나갔을 수 있으므로, 여기서 항상 최신 프레임을 보관
         self._last_bgr_img = bgr_img
+        self._process_qr_codes(bgr_img)
 
         # 현재 모드가 LANE_FOLLOW가 아닐 경우(이미 액션 수행 중 등),
         # 새롭게 마커를 트리거하지 않고 바로 반환
@@ -396,3 +409,47 @@ class ArucoTrigger(object):
             # 모든 액션이 완료된 것이므로 모드를 다시 LANE_FOLLOW로 돌려놓음
             if not self.pending_actions:
                 self.mode = "LANE_FOLLOW"
+
+    def _process_qr_codes(self, frame):
+        """
+        QR 코드를 감지하고 새로운 텍스트가 확인되면 터미널(ROS 로그)로 출력한다.
+        """
+        if self.qr_detector is None:
+            return
+
+        texts = []
+        try:
+            if hasattr(self.qr_detector, "detectAndDecodeMulti"):
+                result = self.qr_detector.detectAndDecodeMulti(frame)
+                if isinstance(result, tuple):
+                    if len(result) == 4:
+                        retval, decoded_info, _, _ = result
+                        if retval and decoded_info:
+                            texts.extend([text for text in decoded_info if text])
+                    else:
+                        decoded_info = result[0]
+                        if isinstance(decoded_info, (list, tuple)):
+                            texts.extend([text for text in decoded_info if text])
+                        elif isinstance(decoded_info, str) and decoded_info:
+                            texts.append(decoded_info)
+            else:
+                result = self.qr_detector.detectAndDecode(frame)
+                if isinstance(result, tuple) and result:
+                    decoded_text = result[0]
+                else:
+                    decoded_text = result
+                if decoded_text:
+                    texts.append(decoded_text)
+        except cv2.error as exc:
+            rospy.logwarn_throttle(5.0, "[ArucoTrigger] QR detection error: %s", exc)
+            return
+
+        if not texts:
+            return
+
+        now = time.time()
+        for text in texts:
+            last = self._qr_last_logged.get(text, 0.0)
+            if (now - last) >= self.qr_log_cooldown:
+                rospy.loginfo("[QR] Detected payload: %s", text)
+                self._qr_last_logged[text] = now
