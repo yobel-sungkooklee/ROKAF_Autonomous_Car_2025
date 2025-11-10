@@ -4,7 +4,6 @@
 import rospy
 import cv2
 import os
-import numpy as np
 from datetime import datetime
 from sensor_msgs.msg import CompressedImage
 from cv_bridge import CvBridge
@@ -17,20 +16,15 @@ class ImageSaver:
         self.latest_frame = None
 
         # 저장 폴더 생성 (없으면 새로 만듦)
-        self.save_dir = os.path.join(os.getcwd(), "yolo_images")
+        self.save_dir = os.path.join(os.getcwd(), "images")
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)
 
         print("[INFO] Image saver ready. Press SPACE to capture, ESC to exit.")
 
     def image_callback(self, msg):
-        """Update latest frame from ROS topic"""
-        # Option 1: using CvBridge
-        self.latest_frame = self.bridge.compressed_imgmsg_to_cv2(msg, "bgr8")
-
-        # Option 2: using numpy + cv2 (alternative)
-        # np_arr = np.frombuffer(msg.data, np.uint8)
-        # self.latest_frame = cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
+        """ROS 카메라 토픽으로부터 이미지를 받는 콜백"""
+        self.latest_frame = self.bridge.compressed_imgmsg_to_cv2(msg, desired_encoding='bgr8')
 
     def run(self):
         """스페이스바 누르면 이미지 저장"""

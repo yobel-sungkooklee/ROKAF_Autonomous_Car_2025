@@ -13,7 +13,7 @@ from geometry_msgs.msg import Twist
 from math import *
 from collections import deque
 # QR 연동이 포함된 버전 사용
-from aruco_trigger_capture import ArucoTrigger
+from aruco_trigger_capture_yolo import ArucoTrigger
 
 distance_threshold = 20
 theta_threshold = 10
