@@ -5,7 +5,7 @@ import rospy, time, math, os
 import cv2
 import numpy as np
 from cv_bridge import CvBridge
-from pyzbar import pyzbar
+# from pyzbar import pyzbar
 from geometry_msgs.msg import Twist
 
 
@@ -25,7 +25,7 @@ except AttributeError:
 
 # ArUco 마커를 검출해주는 전용 헬퍼 클래스 정의
 class ArucoDetector(object):
-    # 생성자: CvBridge를 초기화하여 ROS 이미지 <-> OpenCV 이미지를 변환 가능하게 함
+    # 생성자: CvBridge를 초기화하여 ROS 이미지 <-> OpenCV 이미지를 변환 가능하게 함 -> ROS에서 받아온 sensor_msgs/CompressedImage를 OpenCV가 처리할 수 있는 numpy 배열로 바꿔야만 마커를 찾을 수 있기 때문
     def __init__(self):
         self.bridge = CvBridge()
 
@@ -55,6 +55,7 @@ class ArucoDetector(object):
             # corners와 ids를 함께 순회하면서 각 마커에 대한 정보 계산
             for c, i in zip(corners, ids):
                 # c는 (1,4,2) 형태이므로 (4,2)로 reshape: 마커 4개의 꼭짓점 (x,y)
+                # (1,4,2) 형태 : 첫 번째 차원(1)은 마커별 묶음, 두 번째 차원(4)은 꼭짓점 개수, 세 번째 차원(2)은 (x, y) 좌표. 
                 pts = c.reshape(-1, 2)  # 4x2
 
                 # x좌표들의 평균 -> 중심 x 좌표
@@ -119,6 +120,7 @@ class ArucoTrigger(object):
 
         # 마커별 쿨다운 설정: 같은 마커가 너무 자주 트리거되지 않도록 제한
         # 기본 쿨다운 시간(초) – 특정 id에 대한 설정이 없을 때 사용하는 값
+        # 마커가 한 번 감지된 직후에 바로 다시 보이거나, 카메라 흔들림 때문에 같은 마커가 여러 번 인식되는 경우가 있음. 그런 상황에서 매 프레임마다 회전/캡처를 실행하면 로봇이 계속 같은 동작을 반복해 버림. 그래서 ID마다 “쿨다운 시간”을 두고, 최근에 그 마커를 처리한 시간이 cooldown보다 가까우면 이번 감지는 무시.
         self.cooldown_default = 5.0
 
         # 각 마커 id에 대해 별도의 쿨다운 시간을 부여하는 딕셔너리
@@ -126,7 +128,7 @@ class ArucoTrigger(object):
         self.cooldown_per_id = {0: 6.5, 2: 1.0, 3: 4.0, 4: 1.0}
 
         # 각 마커 id가 마지막으로 트리거된 시간을 기록하는 딕셔너리 {id: last_trigger_time}
-        self.last_trigger_times = {}
+        self.last_trigger_times = {} # 나중에 "now - last"가 쿨다운 시간보다 크면 다시 실행을 허용하고, 그렇지 않으면 무시
 
         # 캡처 관련 설정
         # 화재 건물 이미지를 저장할 디렉토리 경로 설정
@@ -153,7 +155,7 @@ class ArucoTrigger(object):
         # YOLO 캡쳐용 카운터
         self.yolo_capture_count = {}  # {id: count}
 
-        # 이미지 저장을 위해 마지막으로 감지된 프레임을 저장할 변수
+        # 이미지 저장을 위해 마지막으로 감지된 프레임을 저장할 변수 -> 회전·캡처 시퀀스가 끊기거나, 회전 명령 도중 새로운 프레임이 들어와 버리는 등 타이밍이 꼬이는 것을 막기 위해, “가장 최근에 본 장면”을 저장하는 방식으로 구현
         # observe_and_maybe_trigger에서 최신 bgr_img를 계속 업데이트해줌
         self._last_bgr_img = None
 
@@ -177,15 +179,15 @@ class ArucoTrigger(object):
         # 화면 y좌표의 최대값: 이 값을 초과하면 관심 영역 밖으로 간주
         self.max_y = 460.0
 
-        # QR 코드 식별기(py zbar 기반)
-        self.qr_detector = True
-        self._qr_last_logged = {}
-        self.qr_log_cooldown = 1.0  # 동일 QR 텍스트를 너무 자주 찍지 않도록 제한
-        try:
-            import pyzbar  # noqa: F401
-        except ImportError as exc:
-            rospy.logwarn('[ArucoTrigger] pyzbar not available: %s', exc)
-            self.qr_detector = False
+        # # QR 코드 식별기(py zbar 기반)
+        # self.qr_detector = True
+        # self._qr_last_logged = {}
+        # self.qr_log_cooldown = 1.0  # 동일 QR 텍스트를 너무 자주 찍지 않도록 제한
+        # try:
+        #     import pyzbar  # noqa: F401
+        # except ImportError as exc:
+        #     rospy.logwarn('[ArucoTrigger] pyzbar not available: %s', exc)
+        #     self.qr_detector = False
 
 
     # _gate: 하나의 검출(det)에 대해 "이걸 유효한 마커로 볼 것인가?"를 결정하는 함수
@@ -238,22 +240,24 @@ class ArucoTrigger(object):
     # YOLO 추론용 캡쳐: 별도의 디렉토리에 yolo_{ID}_{번호}.jpg 형식으로 저장
     def _capture_yolo_image(self):
         """YOLO 추론용 이미지를 별도 디렉토리에 저장합니다."""
-        if self._last_bgr_img is None or self._last_marker_id is None:
+        if self._last_bgr_img is None or self._last_marker_id is None: # self._last_bgr_img(가장 최근 카메라 프레임)과 self._last_marker_id(그 프레임에서 인정된 마커 ID)가 둘 다 있어야 캡처가 가능
             rospy.logwarn("[ArucoTrigger] Cannot YOLO-capture image: last frame or ID is missing.")
             return
 
+        # 현재 마커 ID를 가져와 self.yolo_capture_count 사전에서 해당 ID의 저장 횟수를 1 증가
         mid = self._last_marker_id
-
         if mid not in self.yolo_capture_count:
             self.yolo_capture_count[mid] = 0
         self.yolo_capture_count[mid] += 1
 
         # 파일명 규칙: yolo_{markerID}_{순번}.jpg
+        # 예를 들어 ID=3, 세 번째 캡처라면 yolo_3_3.jpg.
         filename = os.path.join(
             self.yolo_save_dir,
             "yolo_{}_{}.jpg".format(mid, self.yolo_capture_count[mid])
         )
 
+        # 실제 이미지를 디스크에 쓰고, 성공 시 ROS 로그에 [ArucoTrigger] YOLO image saved: ... 메시지를 남김. 이렇게 쌓인 이미지는 yolo_image.py가 폴더를 감시하며 자동으로 추론에 사용.
         cv2.imwrite(filename, self._last_bgr_img)
         rospy.loginfo("[ArucoTrigger] YOLO image saved: {}".format(filename))
     
@@ -264,7 +268,7 @@ class ArucoTrigger(object):
         # 가장 최근 프레임을 저장합니다. (step()에서 캡처 액션을 위해 사용)
         # 캡처 시점에는 카메라 콜백이 이미 지나갔을 수 있으므로, 여기서 항상 최신 프레임을 보관
         self._last_bgr_img = bgr_img
-        self._process_qr_codes(bgr_img)
+        # self._process_qr_codes(bgr_img)
 
         # 현재 모드가 LANE_FOLLOW가 아닐 경우(이미 액션 수행 중 등),
         # 새롭게 마커를 트리거하지 않고 바로 반환
@@ -417,7 +421,7 @@ class ArucoTrigger(object):
         # 현재 모드가 EXECUTE_ACTION이고, 실행할 pending_actions가 남아있는 경우에만 수행
         if self.mode == "EXECUTE_ACTION" and self.pending_actions:
             # 액션 실행 전에 잠깐 정지 명령을 보내서 움직임을 안정화
-            self.drive_pub.publish(Twist())
+            self.drive_pub.publish(Twist()) # 속도를 0으로 만든 Twitst 메시지 publish해서 로봇 잠깐 정지
 
             # 약간의 시간(0.15초) 대기 – 로봇이 완전히 멈출 시간을 주기 위함
             rospy.sleep(0.15)
@@ -443,35 +447,35 @@ class ArucoTrigger(object):
             if not self.pending_actions:
                 self.mode = "LANE_FOLLOW"
 
-    def _process_qr_codes(self, frame):
-        """
-        QR 코드를 감지하고 새로운 텍스트가 확인되면 터미널(ROS 로그)로 출력한다.
-        """
-        if self.qr_detector is None:
-            return
-
-        if not self.qr_detector:
-            return
-
-        decoded_payloads = []
-        try:
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            results = pyzbar.decode(gray)
-        except Exception as exc:
-            rospy.logwarn_throttle(5.0, "[ArucoTrigger] QR detection error: %s", exc)
-            return
-
-        for obj in results:
-            data = obj.data.decode('utf-8', errors='ignore').strip() if obj.data else ''
-            if data:
-                decoded_payloads.append(data)
-
-        if not decoded_payloads:
-            return
-
-        now = time.time()
-        for text in decoded_payloads:
-            last = self._qr_last_logged.get(text, 0.0)
-            if (now - last) >= self.qr_log_cooldown:
-                rospy.loginfo("[QR] Detected payload: %s", text)
-                self._qr_last_logged[text] = now
+    # def _process_qr_codes(self, frame): # Yolo 버전 이슈로 안 쓰는 중
+    #     """
+    #     QR 코드를 감지하고 새로운 텍스트가 확인되면 터미널(ROS 로그)로 출력한다.
+    #     """
+    #     if self.qr_detector is None:
+    #         return
+    #
+    #     if not self.qr_detector:
+    #         return
+    #
+    #     decoded_payloads = []
+    #     try:
+    #         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    #         results = pyzbar.decode(gray)
+    #     except Exception as exc:
+    #         rospy.logwarn_throttle(5.0, "[ArucoTrigger] QR detection error: %s", exc)
+    #         return
+    #
+    #     for obj in results:
+    #         data = obj.data.decode('utf-8', errors='ignore').strip() if obj.data else ''
+    #         if data:
+    #             decoded_payloads.append(data)
+    #
+    #     if not decoded_payloads:
+    #         return
+    #
+    #     now = time.time()
+    #     for text in decoded_payloads:
+    #         last = self._qr_last_logged.get(text, 0.0)
+    #         if (now - last) >= self.qr_log_cooldown:
+    #             rospy.loginfo("[QR] Detected payload: %s", text)
+    #             self._qr_last_logged[text] = now

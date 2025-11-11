@@ -11,12 +11,12 @@ from cv_bridge import CvBridge
 
 class ImageSaver:
     def __init__(self):
-        rospy.init_node('image_saver_node', anonymous=True)
-        rospy.Subscriber('/usb_cam/image_raw/compressed', CompressedImage, self.image_callback, queue_size=1)
-        self.bridge = CvBridge()
-        self.latest_frame = None
+        rospy.init_node('image_saver_node', anonymous=True) # ROS 마스터에 image_saver_node라는 이름으로 노드 등록 -> 중복 실행/재실행 시 ROS 이름 충돌 때문에 죽지 않도록
+        rospy.Subscriber('/usb_cam/image_raw/compressed', CompressedImage, self.image_callback, queue_size=1) # USB 카메라에서 퍼블리시하는 압축 이미지 토픽을 구독하고, 메시지가 도착할 때마다 self.image_callback 메서드를 호출
+        self.bridge = CvBridge() # ROS 이미지 메시지를 OpenCV의 numpy 배열로 바꾸기 위해 CvBridge 객체를 생성(queue_size=1은 최신 프레임만 유지해 지연을 줄임) -> ROS압축이미지를 OpenCV 이미지로 바꿀 준비
+        self.latest_frame = None # 최근 프레임을 저장할 변수 초기화
 
-        # 저장 폴더 생성 (없으면 새로 만듦)
+        # 저장 폴더 생성 (없으면 새로 만듦) -> 현재는 yolo_images 폴더에 저장
         self.save_dir = os.path.join(os.getcwd(), "yolo_images")
         if not os.path.exists(self.save_dir):
             os.makedirs(self.save_dir)

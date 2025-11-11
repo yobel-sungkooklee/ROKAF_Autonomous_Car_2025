@@ -55,7 +55,7 @@ def warpping(image):
     source = np.float32([[70, 200], [0, 400], [570, 200], [640, 400]]) # TODO
     destination = np.float32([[0, 0], [0, 480], [480, 0], [480, 480]])
     
-    M = cv2.getPerspectiveTransform(source, destination)
+    M = cv2.getPerspectiveTransform(source, destination) # BEV 변환 행렬 (원근 변환 행렬)
     Minv = cv2.getPerspectiveTransform(destination, source)
     
     # image = region_of_interest(image, [roi_source])
@@ -166,23 +166,31 @@ class PIDController(object):
 class lane_detect():
     def __init__(self):
         self.bridge = CvBridge()
-        rospy.init_node('lane_detection_node', anonymous=False)
-        rospy.Subscriber('/usb_cam/image_raw/compressed', CompressedImage, self.camera_callback, queue_size=1, tcp_nodelay=True)
-        self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1)
+        rospy.init_node('lane_detection_node', anonymous=False) # # ROS 마스터에 lane_detection_node라는 이름으로 노드 등록 -> 중복 실행/재실행 시 ROS 이름 충돌 때문에 죽지 않도록
+        rospy.Subscriber('/usb_cam/image_raw/compressed', CompressedImage, self.camera_callback, queue_size=1, tcp_nodelay=True) # USB 카메라 압축 스트림을 구독하고 새 프레임마다 self.camera_callback을 호출. queue_size=1로 최신 한 장만 유지해 지연을 줄이고, tcp_nodelay=True로 작은 패킷도 즉시 전달되게 설정
+        self.pub = rospy.Publisher("/cmd_vel", Twist, queue_size=1) #  cmd_vel 퍼블리셔를 만들어 차선 제어 결과를 곧바로 로봇에 보낼 수 있게
 
-        self.speed = Twist()
+        self.speed = Twist() # 퍼블리시할 메시지 객체를 미리 만들고 각 필드를 반복해서 갱신
+        
+        # 직진 기본 속도와 허용되는 최대 회전각속도를 정의.
         self.base_linear_speed = 0.1
         self.max_angular_speed = 1.5
+        
+        # 에러 가중치 합을 위해서, 횡방향 오차와 헤딩 오차를 얼마나 중요하게 다룰지 가중치로 설정, 두 값을 조합해 PID 입력을 구성
         self.lat_weight = 1.2
         self.heading_weight = 0.7
+        
+        # 조향용 PID를 원하는 Gain과 적분 한계로 초기화 -> self.pid.update()에서 사용
         self.pid = PIDController(kp=0.9, ki=0.001, kd=0.01, integral_limit=2.0) # TODO
+        
+        # ArucoTrigger 객체 생성: 주행 중 특정 ArUco 마커(또는 QR  코드)를 보게 되면 정해진 회전·이미지 캡처 같은 “미션 동작”을 실행할 수 있도록 -> ArUco 마커를 감지하면 규칙 테이블에 따라 "right", 90° 같은 액션 목록을 큐에 쌓아 둠
         self.aruco_trig = ArucoTrigger(cmd_topic="/cmd_vel")
 
     
     def camera_callback(self, data):
-        self.image = self.bridge.compressed_imgmsg_to_cv2(data, desired_encoding="bgr8")
-        self.aruco_trig.observe_and_maybe_trigger(self.image)
-        self.lane_detect()
+        self.image = self.bridge.compressed_imgmsg_to_cv2(data, desired_encoding="bgr8") # 압축된 이미지 메시지를 OpenCV BGR 이미지로 변환
+        self.aruco_trig.observe_and_maybe_trigger(self.image) # 현재 프레임에서 ArUco/QR 코드를 감시해, 규칙 상 실행해야 할 액션이 생겼는지 판단하는 단계
+        self.lane_detect() # 차선 처리 파이프라인 전체 수행
         
 
     
@@ -269,23 +277,27 @@ class lane_detect():
                 
         cv2.namedWindow('Original')
         cv2.moveWindow('Original', 700, 0)
+        
+        # 워핑 기준점 표시 - 워핑(Warping): 원본 카메라 영상을 Bird’s Eye View처럼 보이도록 좌표계를 변환하는 작업
         cv2.circle(self.image, (0,400), 10, (0,0,255), -1) #red
         cv2.circle(self.image, (640,400), 10, (0,255,0), -1) #green
         cv2.circle(self.image, (70,200), 10, (255,0,0), -1) #blue
         cv2.circle(self.image, (570,200), 10, (255,0,255), -1) #magenta
         cv2.imshow('Original', self.image)
         
-        
+        # 네 개의 기준점(바닥면에서 보고 싶은 사다리꼴 영역의 모서리)을 입력으로 받아 cv2.getPerspectiveTransform을 통해 투시 변환 행렬을 만듦)
         warpped_img, minv = warpping(self.image)
         cv2.namedWindow('BEV')
         cv2.moveWindow('BEV', 0, 0)
         cv2.imshow('BEV', warpped_img)
         
+        # 가우시안 블러 적용: 노이즈(고주파) 성분 먼저 줄여서 뒤따르는 단계들이 더 안정적으로 동작하도록.
         blurred_img = cv2.GaussianBlur(warpped_img, (7, 7), 5)
         # cv2.namedWindow('Blurred')
         # cv2.moveWindow('Blurred', 350, 0)
         # cv2.imshow('Blurred', blurred_img)
         
+        # BGR 이미지 -> HLS 색 공간으로 변환 후, 지정한 범위(여기서는 black_lower=[0,0,0], black_upper=[180,255,50])에 속하는 픽셀만 남도록 cv2.inRange를 적용
         w_f_img = color_filter(blurred_img)
         # cv2.rectangle(w_f_img, (0, 0), (480, 100), (0, 0, 0), -1)
         # cv2.namedWindow('Color filter')
@@ -293,10 +305,14 @@ class lane_detect():
         # cv2.circle(w_f_img, (240,240), 2, (255,255,255), thickness=-1)
         # cv2.imshow('Color filter', w_f_img)
         
+        # 그레이스케일을 통해 밝기 정보만을 이용하기 위함: threshold나 Canny 같은 함수는 단일 채널(흑백) 데이터를 요구하거나 그쪽이 더 명확하게 동작
         grayscale = cv2.cvtColor(w_f_img, cv2.COLOR_BGR2GRAY)
         # print(grayscale[240][240])
+        
+        # 그레이스케일 이미지를 이진 영상으로 바꾸는 단계입니다. 픽셀 값이 50 이상이면 255(흰색)로, 50 미만이면 0(검정)으로 설정해 “차선 후보 vs 배경”을 분리 -> thresh: 이진화된 결과 이미지
         ret, thresh = cv2.threshold(grayscale, 50, 255, cv2.THRESH_BINARY) #170, 255
         
+        # Canny 엣지 검출 적용: 차선의 경계선을 더 뚜렷하게 강조: 이진화된 이미지 thresh를 입력으로 받아, 그라디언트 크기를 계산하고 하위/상위 임계값(10, 100)을 이용해 진짜 엣지와 약한 엣지를 분류해 얇은 에지 선만 남김 ->  이렇게 하면 나중에 cv2.HoughLines가 차선 경계를 더 정확히 찾을 수 있음.
         canny_img = cv2.Canny(thresh, 10, 100)
         # cv2.namedWindow('Canny')
         # cv2.moveWindow('Canny', 700, 600)
@@ -305,15 +321,16 @@ class lane_detect():
         # cv2.moveWindow('thresh', 700, 600)
         # cv2.imshow('thresh', thresh)
         
+        
+        # 캐니로 얻은 엣지 이미지에서 직선을 찾는 Hough 변환: 이 함수는 (rho, theta) 쌍들의 배열을 돌려주고, 각 쌍이 이미지 상의 한 직선을 뜻함. 이후 코드는 이 결과를 이용해 차선 후보를 시각화하거나 슬라이딩 윈도를 위한 마스크를 만듦.
         lines = cv2.HoughLines(canny_img, 1, np.pi/180, 80, None, 0, 0)
         
+        # Hough 변환 결과를 시각화: cv2.HoughLines가 준 각 (rho, theta) 직선 정보를 실제 이미지 좌표로 변환
         #hough_img = thresh.copy()
         #hough_img = canny_img.copy()
         hough_img = np.zeros((480, 480))
-        
         if lines is not None:
             for line in lines:
-                
                 rho, theta = line[0]
                 a = np.cos(theta)
                 b = np.sin(theta)
@@ -323,12 +340,10 @@ class lane_detect():
                 y1 = int ((y0) + 1000*(a))
                 x2 = int(x0 - 1000*(-b))
                 y2 = int(y0 - 1000*(a))
-                
                 slope = 90 - degrees(atan(b / a))
             
                 if abs(slope) < 5:
                     cv2.line(hough_img, (x1, y1), (x2, y2), 0, 30)
-                
                 else:    
                     cv2.line(hough_img, (x1, y1), (x2, y2), 255, 8)
         
@@ -336,38 +351,44 @@ class lane_detect():
         # cv2.moveWindow('Hough', 700, 0)
         # cv2.imshow('Hough', hough_img)
         
-        fit, avg = self.high_level_detect(hough_img)
+        fit, avg = self.high_level_detect(hough_img) # hough_img의 하단 절반부터 장단으로 올라가면서, 가로로 긴 슬라이딩 윈도우를 여러 개 쌓아 올림. -> 각 윈도 안에서 값이 0이 아닌 픽셀(차선 후보)을 찾아 평균 x 좌표를 계산하면, 해당 높이(y)에서 차선 중심이 어디인지 알 수 있음. 이렇게 15개 정도의 윈도에서 (y, x) 쌍을 모아두고, 마지막에 이 점들을 2차 다항식으로 피팅하면 “차선 중앙 곡선”이 나옴.
         
         # fit = np.polyfit(np.array(y),np.array(x),1)
         # print(fit)
         
+        # 다항식 객체를 만든 뒤 line[1]을 읽어 1차 계수(기울기)를 얻음.
         line = np.poly1d(fit)
          
-        # 좌,우측 차선의 휘어진 각도
+        # atan(line[1])로 차선 곡선의 헤딩 편차(라디안)를 계산 -> 이 heading_rad는 PID 제어에서 사용되는 heading 에러
         heading_rad = atan(line[1])
-
 
         cv2.namedWindow('Sliding Window')
         cv2.moveWindow('Sliding Window', 1400, 0)
         cv2.imshow("Sliding Window", out_img)
         cv2.waitKey(1)
+        
+        # 슬라이딩 슬라이딩 윈도 결과가 유효하지 않을 때(차선을 못 찾았거나 모두 0으로 떨어졌을 때) PID를 초기화하고 제어를 건너뛰기 위한 용도
         if fit[0]==0 and fit[1]==0:
             self.pid.reset()
             return
 
+        # y=480(이미지 하단, 차량 바로 앞)을 기준으로 차선 중심 x 좌표를 계산. 슬라이딩 윈도에서 얻은 2차 곡선을 p(y)로 보고, 맨 아래에서 차선이 화면 중앙(240)에 대해 얼마나 치우쳤는지 확인하는 단계                           
         p = np.poly1d(fit)
         x_at_480 = p(480)
 
+        # 차선 중심과 차량 중심 사이의 횡방향 오차(픽셀)
         distance = - (x_at_480 - 240) # TODO
         print(distance)
-        if np.isnan(distance) or np.isnan(heading_rad):
+        if np.isnan(distance) or np.isnan(heading_rad): # 계산 중 NaN이 발생하면 PID 제어를 건너뛰고 리셋
             self.pid.reset()
             return
 
         # print(line_angle, distance)
 
-        theta_err = heading_rad
-        lat_norm = distance / 240.0
+        theta_err = heading_rad # 헤딩 에러: 차량 진행 방향 대비 차선이 어느 방향으로 휘어 있는지
+        lat_norm = distance / 240.0 # 횡방향 오차 정규화: 차선 중심이 화면 중앙에서 얼마나 좌우로 벗어났는지를 픽셀 단위 distance로 측정한 뒤, 최대 반폭 240픽셀로 나눠 -1.0~1.0 범위로 정규화한 “횡방향( lateral ) 에러”
+        
+        # 가중합 에러
         combined_error = (self.lat_weight * lat_norm) + (self.heading_weight * theta_err)
 
         pid_output = self.pid.update(combined_error, rospy.get_time())
