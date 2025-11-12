@@ -190,6 +190,12 @@ class lane_detect():
     def camera_callback(self, data):
         self.image = self.bridge.compressed_imgmsg_to_cv2(data, desired_encoding="bgr8") # 압축된 이미지 메시지를 OpenCV BGR 이미지로 변환
         self.aruco_trig.observe_and_maybe_trigger(self.image) # 현재 프레임에서 ArUco/QR 코드를 감시해, 규칙 상 실행해야 할 액션이 생겼는지 판단하는 단계
+
+        # Non-blocking flow: do NOT call step() here and block the image callback.
+        # Instead, always run lane detection immediately so the camera callback
+        # returns quickly and continues to receive fresh frames. Any pending
+        # ArUco actions will be handled asynchronously by ArucoTrigger.step()
+        # when called from the main lane_detect() pipeline below.
         self.lane_detect() # 차선 처리 파이프라인 전체 수행
         
 
@@ -399,8 +405,15 @@ class lane_detect():
         self.pub.publish(self.speed)
         #print("angle(rad): ", theta_err, "lat_norm: ", lat_norm)
         #print("cmd_ang: ", self.speed.angular.z)
-        
-        self.aruco_trig.step()
+        # Call ArucoTrigger.step() here (non-blocking if ArucoTrigger uses a background
+        # worker). This keeps the image callback fast while allowing Aruco actions
+        # to be executed asynchronously.
+        try:
+            self.aruco_trig.step()
+        except Exception:
+            # If the ArucoTrigger.step() raises for any reason, log/ignore to
+            # avoid crashing the lane detection loop.
+            rospy.logwarn("ArucoTrigger.step() raised an exception")
         
 
 

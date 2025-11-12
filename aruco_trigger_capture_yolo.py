@@ -2,6 +2,7 @@
 
 #!/usr/bin/env python
 import rospy, time, math, os
+import threading
 import cv2
 import numpy as np
 from cv_bridge import CvBridge
@@ -94,16 +95,16 @@ class ArucoTrigger(object):
         self.rules = {
             # 캡처 액션 포함 예시
             # id=0 마커가 1번째 등장할 때: 오른쪽 90도 회전, 2번째 등장할 때: 오른쪽 20도 회전 후 YOLO 위한 이미지 캡쳐
-            0: {1: [("right", 90)], 2: [("right", 20), ("yolo_capture", 0)]},
+            12: {1: [("right", 90), ("left",180), ("yolo_capture", 0)]},
+            19: {1: [("right", 90), ("capture", 0), ("left",90)]},
             # id=2 마커가 1번째 등장할 때: 오른쪽 90도 회전
             2: {1: ("right", 90)},
             # id=3 마커가 1번째 등장할 때: 왼쪽 90도 회전 후 캡처,
             3: {1: [("left", 90), ("capture", 0)], 2: ("right", 90)},
             # id=4 마커가 2번째 등장할 때: 왼쪽 90도 회전
             4: {2: ("left", 90)},
-            
-            5: {1: ("capture", 0)},
-            6: {1: ("yolo_capture", 0)}
+            17: {1: ("capture", 0)},
+            18: {1: ("yolo_capture", 0)}
         }
         
         # --- [추가된 코드] 'friendly'/'enemy' ArUco ID 정의 ---
@@ -187,6 +188,13 @@ class ArucoTrigger(object):
 
         # 화면 y좌표의 최대값: 이 값을 초과하면 관심 영역 밖으로 간주
         self.max_y = 460.0
+
+        # --- Action execution worker state ---
+        # We run a background thread to perform rotations/captures so camera callbacks
+        # continue to be serviced and self._last_bgr_img remains up-to-date.
+        self._action_lock = threading.Lock()
+        self._action_thread = None
+        self._stop_action_thread = False
 
         # # QR 코드 식별기(py zbar 기반)
         # self.qr_detector = True
@@ -435,64 +443,50 @@ class ArucoTrigger(object):
     #  - mode가 EXECUTE_ACTION일 때, pending_actions에 쌓여 있는 액션들을 하나씩 꺼내 실행
     #  - 모든 액션이 끝나면 다시 LANE_FOLLOW 모드로 복귀
     def step(self):
-        # 현재 모드가 EXECUTE_ACTION이고, 실행할 pending_actions가 남아있는 경우에만 수행
+        # Non-blocking: if there are pending actions and no worker thread is
+        # active, spawn a background thread to execute them. This prevents
+        # blocking the image callback so that fresh frames keep arriving and
+        # self._last_bgr_img reflects the real-time camera image at capture time.
         if self.mode == "EXECUTE_ACTION" and self.pending_actions:
-            # 액션 실행 전에 잠깐 정지 명령을 보내서 움직임을 안정화
-            self.drive_pub.publish(Twist()) # 속도를 0으로 만든 Twitst 메시지 publish해서 로봇 잠깐 정지
+            if self._action_thread is None or (not self._action_thread.is_alive()):
+                t = threading.Thread(target=self._action_worker)
+                try:
+                    t.daemon = True
+                except Exception:
+                    t.setDaemon(True)
+                t.start()
+                self._action_thread = t
 
-            # 약간의 시간(0.15초) 대기 – 로봇이 완전히 멈출 시간을 주기 위함
+        # Keep API compatibility: step() does not need to return anything here.
+        return None
+
+    def _action_worker(self):
+        """Background worker that executes pending_actions one by one.
+
+        We only pop a single action while holding the lock, then perform the
+        action (which may block) without holding the lock so camera callbacks
+        can continue updating self._last_bgr_img.
+        """
+        while not rospy.is_shutdown():
+            with self._action_lock:
+                if not self.pending_actions:
+                    # no more actions, switch back to lane follow and exit
+                    self.mode = "LANE_FOLLOW"
+                    return
+                direction, deg = self.pending_actions.pop(0)
+
+            # stabilize: send stop and wait briefly
+            self.drive_pub.publish(Twist())
             rospy.sleep(0.15)
 
-            # pending_actions 리스트에서 맨 앞의 액션 하나를 꺼냄
-            # action 형식: (direction, degrees)
-            direction, deg = self.pending_actions.pop(0)
-
-            # 캡처 액션 처리:
-            # direction 문자열이 "capture"라면 회전이 아니라 이미지 저장을 수행
             if direction == "capture":
-                # 화재 건물용 캡쳐
+                # wait a short time to let camera update, then capture
+                # rospy.sleep(4)
                 self._capture_image()
             elif direction == "yolo_capture":
-                # YOLO 추론용 캡쳐
+                # rospy.sleep(4)
                 self._capture_yolo_image()
             else:
-                # 그 외의 경우("right", "left", "turn", "turn1" 등)은 회전 동작 실행
+                # rotation; this will publish commands repeatedly but does not
+                # block camera callbacks because it's running in a separate thread.
                 self._rotate_in_place(direction, deg, ang_speed=1.0)
-
-            # 이번 액션을 실행한 후, 남은 pending_actions가 없으면
-            # 모든 액션이 완료된 것이므로 모드를 다시 LANE_FOLLOW로 돌려놓음
-            if not self.pending_actions:
-                self.mode = "LANE_FOLLOW"
-
-    # def _process_qr_codes(self, frame): # Yolo 버전 이슈로 안 쓰는 중
-    #     """
-    #     QR 코드를 감지하고 새로운 텍스트가 확인되면 터미널(ROS 로그)로 출력한다.
-    #     """
-    #     if self.qr_detector is None:
-    #         return
-    #
-    #     if not self.qr_detector:
-    #         return
-    #
-    #     decoded_payloads = []
-    #     try:
-    #         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    #         results = pyzbar.decode(gray)
-    #     except Exception as exc:
-    #         rospy.logwarn_throttle(5.0, "[ArucoTrigger] QR detection error: %s", exc)
-    #         return
-    #
-    #     for obj in results:
-    #         data = obj.data.decode('utf-8', errors='ignore').strip() if obj.data else ''
-    #         if data:
-    #             decoded_payloads.append(data)
-    #
-    #     if not decoded_payloads:
-    #         return
-    #
-    #     now = time.time()
-    #     for text in decoded_payloads:
-    #         last = self._qr_last_logged.get(text, 0.0)
-    #         if (now - last) >= self.qr_log_cooldown:
-    #             rospy.loginfo("[QR] Detected payload: %s", text)
-    #             self._qr_last_logged[text] = now
