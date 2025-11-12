@@ -3,7 +3,7 @@
 roslaunch mm_cam usb_cam.launch
 roslaunch omo_r1mini_bringup omo_r1mini_bringup.launch
 python lane_follower-PID.py
-python yolo_image.py
+(myenv) python yolo_image.py 
 ```
 1) roslaunch mm_cam usb_cam.launch
 -  ROS에서 USB 카메라 노드를 띄우는 명령

@@ -101,7 +101,16 @@ class ArucoTrigger(object):
             3: {1: [("left", 90), ("capture", 0)], 2: ("right", 90)},
             # id=4 마커가 2번째 등장할 때: 왼쪽 90도 회전
             4: {2: ("left", 90)},
+            
+            5: {1: ("capture", 0)},
+            6: {1: ("yolo_capture", 0)}
         }
+        
+        # --- [추가된 코드] 'friendly'/'enemy' ArUco ID 정의 ---
+        # friendly/enemy 그룹 ArUco ID 리스트 정의
+        self.friendly_ids = [18, 19, 20]
+        self.enemy_ids = [15, 16, 17]
+        # ---------------------------------------------------
 
         # ArUco 마커를 실제로 검출하는 헬퍼 객체
         self.detector = ArucoDetector()
@@ -334,6 +343,14 @@ class ArucoTrigger(object):
         # (now - last)가 cooldown보다 작으면, 쿨다운이 끝나지 않았으므로 그냥 반환
         if (now - last) < cooldown:
             return
+            
+        # --- [추가된 코드] 'friendly'/'enemy' ArUco ID 터미널 출력 ---
+        # 쿨다운 및 연속 카운트 조건을 모두 만족했을 때만 출력
+        if mid in self.friendly_ids:
+            rospy.loginfo("Detected friendly ArUco ID: {}".format(mid))
+        elif mid in self.enemy_ids:
+            rospy.loginfo("Detected enemy ArUco ID: {}".format(mid))
+        # ---------------------------------------------------
 
         # 등장 횟수 카운트:
         # 이 마커 id(mid)가 지금까지 몇 번째로 트리거 조건을 만족했는지 계산
